@@ -51,6 +51,9 @@ typings/
 # Output of 'npm pack'
 *.tgz
 
+# WebStorm specific files
+.ides/*
+
 # Yarn Integrity file
 .yarn-integrity
 
