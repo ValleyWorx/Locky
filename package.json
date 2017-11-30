@@ -1,6 +1,6 @@
 {
   "name": "Locky",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -11,7 +11,7 @@
     "url": "git+https://github.com/ValleyWorx/Locky.git"
   },
   "keywords": [],
-  "author": "",
+  "author": "Nate Bunney and James Moore",
   "license": "ISC",
   "bugs": {
     "url": "https://github.com/ValleyWorx/Locky/issues"
