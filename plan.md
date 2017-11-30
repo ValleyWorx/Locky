@@ -1,5 +1,7 @@
 firebase firestore
+
 nedb for local storage
+
 https://www.npmjs.com/package/rpi-gpio
 
 usercollection schema
