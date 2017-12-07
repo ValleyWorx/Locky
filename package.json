@@ -18,8 +18,10 @@
   },
   "homepage": "https://github.com/ValleyWorx/Locky#readme",
   "dependencies": {
+    "bcryptjs": "^2.4.3",
     "dotenv": "^4.0.0",
     "firebase-admin": "^5.5.1",
+    "limiter": "^1.1.2",
     "nedb": "^1.8.0",
     "node-hid": "^0.5.7",
     "ramda": "^0.25.0"
