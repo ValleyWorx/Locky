@@ -7,11 +7,9 @@ const jsonfile = require('jsonfile');
 const debounce = require('lodash.debounce');
 const key = require('./key.json');
 
-const CMDS = {
-  load,
-  unlock,
-  save: debounce(save, 5000)
-};
+function cmd(fn, args = []) {
+  return { fn, args };
+}
 
 const USERS = './users.json';
 
@@ -20,7 +18,7 @@ const init = [
     userCode: '',
     users: {}
   },
-  CMDS.load
+  cmd(load)
 ];
 
 const MSGS = {
@@ -68,7 +66,8 @@ function update(msg, model) {
     case MSGS.USER_UPDATE: {
       const { user: { id, ...user } } = msg;
       const users = R.merge(model.users, { [id]: user });
-      return R.merge(model, { users });
+      const saveCmd = cmd(debounce(save, 5000), [users]);
+      return [R.merge(model, { users }), saveCmd];
     }
     case MSGS.USERS_REPLACE: {
       const { users } = msg;
@@ -83,7 +82,7 @@ function userInputUpdate(msg, model) {
   if (input === '\n') {
     const isVerified = verifyUserCode(users, userCode);
     const updatedModel = R.merge(model, { userCode: '' });
-    const cmd = isVerified ? CMDS.unlock : null;
+    const unlockCmd = isVerified ? cmd(unlock) : null;
     return [updatedModel, cmd];
   }
   const userCode = model.userCode + input;
@@ -110,20 +109,26 @@ function codeToInput(code) {
 
 // side-effects below
 
-function app(init, reducer) {
+function app(init, update) {
   const [initModel, initCmd] = init;
   let model = initModel;
   let cmd;
-  initCmd && initCmd(send);
+  exec(initCmd);
+  function exec(cmd) {
+    const { fn = () => {}, args = [] } = cmd || {};
+    const updatedArgs = R.prepend(send, args);
+    R.apply(fn, updatedArgs);
+  }
   function send(msg) {
-    const res = reducer(msg, model);
+    const res = update(msg, model);
     if (R.type(res) === 'Array') {
       model = res[0];
       cmd = res[1];
     } else {
       model = res;
+      cmd = null;
     }
-    cmd && cmd(send);
+    exec(cmd);
   }
 }
 
@@ -195,7 +200,7 @@ function onKeypadData(send, device) {
   };
 }
 
-function save(send, { users }) {
+function save(send, users) {
   jsonfile.writeFileSync(USERS, users);
 }
 
