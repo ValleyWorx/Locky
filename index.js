@@ -1,54 +1,103 @@
-require('dotenv').config();
-const hid = require('node-hid');
-const path = require('path');
-const Datastore = require('nedb');
-const admin = require('firebase-admin');
 const R = require('ramda');
-const util = require('util');
-const crypto = require('crypto');
+const fireStore = require('firebase-admin');
+const hid = require('node-hid');
 const bcrypt = require('bcryptjs');
-const RateLimiter = require('limiter').RateLimiter;
-const serviceAccount = require('./key.json');
-const limiter = new RateLimiter(20, 'minute', true);
+const crypto = require('crypto');
+const jsonfile = require('jsonfile');
+const debounce = require('lodash.debounce');
+const key = require('./key.json');
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
+const CMDS = {
+  load,
+  unlock,
+  save: debounce(save, 5000)
+};
 
-const db = admin.firestore();
-const localDb = new Datastore({
-  filename: path.join(__dirname, 'localdb.db'),
-  autoload: true
-});
-localDb.find = util.promisify(localDb.find);
-localDb.insert = util.promisify(localDb.insert);
-localDb.update = util.promisify(localDb.update);
+const USERS = './users.json';
 
-const userCollection = db.collection('user');
-userCollection.onSnapshot(async snapShot => {
-  const docs = R.map(doc => {
-    const { id } = doc;
-    return R.merge(doc.data(), { id });
-  })(snapShot.docs);
-  R.forEach(async doc => {
-    const { id } = doc;
-    const localDoc = await localDb.find({ id });
-    console.log(localDoc.length);
-    if (localDoc.length === 0) {
-      await localDb.insert(doc);
-    } else {
-      await localDb.update({ id }, doc);
+const init = [
+  {
+    userCode: '',
+    users: {}
+  },
+  CMDS.load
+];
+
+const MSGS = {
+  USER_INPUT: 'USER_INPUT',
+  USER_UPDATE: 'USER_UPDATE',
+  USERS_REPLACE: 'USERS_REPLACE',
+  USER_INPUT_REPLACE: 'USER_INPUT_REPLACE'
+};
+
+function userInputMsg(input) {
+  return {
+    type: MSGS.USER_INPUT,
+    input
+  };
+}
+
+function userUpdateMsg(user) {
+  return {
+    type: MSGS.USER_UPDATE,
+    user
+  };
+}
+function usersReplaceMsg(users) {
+  return {
+    type: MSGS.USERS_REPLACE,
+    users
+  };
+}
+
+function userInputReplaceMsg(input) {
+  return {
+    type: MSGS.USER_INPUT_REPLACE,
+    input
+  };
+}
+
+function update(msg, model) {
+  switch (msg.type) {
+    case MSGS.USER_INPUT: {
+      return userInputUpdate(msg, model);
     }
-    console.log({ localDoc });
-  })(docs);
-  console.log(docs);
-  // console.log(doc.docs[0].data());
-});
+    case MSGS.USER_INPUT_REPLACE: {
+      return R.merge(model, { userCode: '' });
+    }
+    case MSGS.USER_UPDATE: {
+      const { user: { id, ...user } } = msg;
+      const users = R.merge(model.users, { [id]: user });
+      return R.merge(model, { users });
+    }
+    case MSGS.USERS_REPLACE: {
+      const { users } = msg;
+      return R.merge(model, { users });
+    }
+  }
+}
 
-// const device = new hid.HID(1133, 49948);
-const device = new hid.HID(1226, 58);
-function toNumber(code) {
-  // TODO: handle enter key, period key gives zero
+function userInputUpdate(msg, model) {
+  const { input } = msg;
+  const { users, userCode } = model;
+  if (input === '\n') {
+    const isVerified = verifyUserCode(users, userCode);
+    const updatedModel = R.merge(model, { userCode: '' });
+    const cmd = isVerified ? CMDS.unlock : null;
+    return [updatedModel, cmd];
+  }
+  const userCode = model.userCode + input;
+  return [R.merge(model, { userCode })];
+}
+
+function verifyUserCode(users, userCode) {
+  const [id, code] = userCode.split('.');
+  const { hashedCode } = R.propOr({}, id, users);
+  if (!hashedCode) return false;
+  return bcrypt.compareSync(code, hashedCode);
+}
+
+function codeToInput(code) {
   switch (code) {
     case 99:
       return '.';
@@ -58,51 +107,101 @@ function toNumber(code) {
       return (code - 88) % 10;
   }
 }
-let lastHash;
-let _userCode = '';
-function onData(buffer) {
-  const { data } = buffer.toJSON();
-  const hash = crypto
-    .createHash('md5')
-    .update(JSON.stringify(data))
-    .digest('hex');
-  if (hash === lastHash) return;
-  lastHash = hash;
-  const [ctrl, , code] = data;
-  if (!ctrl && !code) return;
-  const num = toNumber(code);
-  if (ctrl === 1 && code === 6) {
-    device.close();
-    process.exit();
+
+// side-effects below
+
+function app(init, reducer) {
+  const [initModel, initCmd] = init;
+  let model = initModel;
+  let cmd;
+  initCmd && initCmd(send);
+  function send(msg) {
+    const res = reducer(msg, model);
+    if (R.type(res) === 'Array') {
+      model = res[0];
+      cmd = res[1];
+    } else {
+      model = res;
+    }
+    cmd && cmd(send);
   }
-  if (num === '\n') {
-    limiter.removeTokens(1, () => {
-      verifyUserCode(_userCode);
-    });
-    _userCode = '';
-    return;
+}
+
+const onSnapshot = R.curry((send, { docs }) => {
+  function sendUserUpdateMsg(doc) {
+    const user = R.merge(doc.data(), { id: doc.id });
+    const msg = userUpdateMsg(user);
+    send(msg);
   }
-  _userCode += num;
-  console.log(hash);
-  console.log({ ctrl, code, num });
+  R.forEach(sendUserUpdateMsg, docs);
+});
+
+function load(send) {
+  try {
+    const users = jsonfile.readFileSync(USERS);
+    send(usersReplaceMsg(users));
+  } catch (err) {
+    console.log(err);
+  }
+  keypadListener(send);
+  dbListener(send);
 }
-device.on('data', onData);
 
-async function verifyUserCode(userCode) {
-  const tokens = limiter.getTokensRemaining();
-  console.log({ tokens });
-  if (tokens < 1) return;
-  const [id, code] = userCode.split('.');
-  console.log({ id, code });
-
-  const [user] = await localDb.find({ id });
-  if (!user) return;
-  const { hashedCode } = user;
-  const isValid = await bcrypt.compare(code, hashedCode);
-
-  console.log({ user, isValid });
+function dbListener(send) {
+  fireStore.initializeApp({
+    credential: fireStore.credential.cert(key)
+  });
+  const db = fireStore.firestore();
+  const userCollection = db.collection('user');
+  userCollection.onSnapshot(onSnapshot(send));
 }
-// (async () => {
-//   const hash = await bcrypt.hash('1235', 10);
-//   console.log(hash);
-// })();
+
+function keypadListener(send) {
+  // TODO: figure out how to dynamicly figure out vid, pid below
+  // console.log(hid.devices());
+  try {
+    const device = new hid.HID(1226, 58);
+    device.on('data', onKeypadData(send, device));
+  } catch (err) {
+    console.log(err);
+  }
+}
+
+function onKeypadData(send, device) {
+  let lastHash;
+  let limit = 20;
+  setInterval(() => {
+    limit = 20;
+  }, 60000);
+  return function(buffer) {
+    const { data } = buffer.toJSON();
+    const hash = crypto
+      .createHash('md5')
+      .update(JSON.stringify(data))
+      .digest('hex');
+    if (hash === lastHash) return;
+    lastHash = hash;
+    const [ctrl, , code] = data;
+    if (!ctrl && !code) return;
+    const input = codeToInput(code);
+    if (input === '\n' && --limit < 0) {
+      return send(userInputReplaceMsg(''));
+    }
+    if (ctrl === 1 && code === 6) {
+      device.close();
+      process.exit();
+    }
+    send(userInputMsg(input));
+  };
+}
+
+function save(send, { users }) {
+  jsonfile.writeFileSync(USERS, users);
+}
+
+function unlock(send) {
+  // unlock door
+  console.log('unlock called...');
+}
+
+app(init, update);
