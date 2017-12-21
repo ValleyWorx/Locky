@@ -26,6 +26,7 @@
     "lodash.debounce": "^4.0.8",
     "nedb": "^1.8.0",
     "node-hid": "^0.5.7",
-    "ramda": "^0.25.0"
+    "ramda": "^0.25.0",
+    "rpi-gpio": "^0.9.1"
   }
 }

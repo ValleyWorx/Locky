@@ -6,6 +6,14 @@ const crypto = require('crypto');
 const jsonfile = require('jsonfile');
 const debounce = require('lodash.debounce');
 const key = require('./key.json');
+const gpio = require('rpi-gpio');
+const utility = require('util');
+
+const PIN = 2;
+const DOOR_TIMEOUT = 5000;
+
+gpio.setup = utility.promisify(gpio.setup);
+gpio.write = utility.promisify(gpio.write);
 
 function cmd(fn, args = []) {
   return { fn, args };
@@ -142,8 +150,8 @@ const onSnapshot = R.curry((send, { docs }) => {
   }
   R.forEach(sendUserUpdateMsg, docs);
 });
-
-function load(send) {
+async function load(send) {
+  await gpio.setup(PIN, gpio.DIR_OUT);
   try {
     const users = jsonfile.readFileSync(USERS);
     send(usersReplaceMsg(users));
@@ -209,9 +217,13 @@ function save(send, users) {
   jsonfile.writeFileSync(USERS, users);
 }
 
-function unlock(send) {
+async function unlock(send) {
   // unlock door
   console.log('unlock called...');
+  await gpio.write(PIN, true);
+  setTimeout(() => {
+    gpio.write(PIN, false);
+  }, DOOR_TIMEOUT);
 }
 
 app(init, update);
