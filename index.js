@@ -56,6 +56,7 @@ function userInputReplaceMsg(input) {
 }
 
 function update(msg, model) {
+  console.log(JSON.stringify({ msg, model }, null, 2));
   switch (msg.type) {
     case MSGS.USER_INPUT: {
       return userInputUpdate(msg, model);
@@ -83,10 +84,10 @@ function userInputUpdate(msg, model) {
     const isVerified = verifyUserCode(users, userCode);
     const updatedModel = R.merge(model, { userCode: '' });
     const unlockCmd = isVerified ? cmd(unlock) : null;
-    return [updatedModel, cmd];
+    return [updatedModel, unlockCmd];
   }
-  const userCode = model.userCode + input;
-  return [R.merge(model, { userCode })];
+  const updatedUserCode = model.userCode + input;
+  return [R.merge(model, { userCode: updatedUserCode })];
 }
 
 function verifyUserCode(users, userCode) {
@@ -115,6 +116,7 @@ function app(init, update) {
   let cmd;
   exec(initCmd);
   function exec(cmd) {
+    console.log({ cmd });
     const { fn = () => {}, args = [] } = cmd || {};
     const updatedArgs = R.prepend(send, args);
     R.apply(fn, updatedArgs);
@@ -164,8 +166,11 @@ function dbListener(send) {
 function keypadListener(send) {
   // TODO: figure out how to dynamicly figure out vid, pid below
   // console.log(hid.devices());
+  const devices = hid.devices();
+  const deviceConfig = R.find(R.propEq('manufacturer', 'SIGMACHIP'), devices);
+  const { vendorId, productId } = deviceConfig;
   try {
-    const device = new hid.HID(1226, 58);
+    const device = new hid.HID(vendorId, productId);
     device.on('data', onKeypadData(send, device));
   } catch (err) {
     console.log(err);
